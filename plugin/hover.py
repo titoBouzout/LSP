@@ -44,8 +44,6 @@ import html
 import mdpopups
 import sublime
 import sublime_plugin
-
-
 SUBLIME_WORD_MASK = 515
 SessionName = str
 ResolvedHover = Union[Hover, Error]
@@ -264,6 +262,14 @@ class LspHoverCommand(LspTextCommand):
         for hover, language_map in self._hover_responses:
             content = (hover.get('contents') or '') if isinstance(hover, dict) else ''
             allowed_formats = FORMAT_MARKED_STRING | FORMAT_MARKUP_CONTENT
+
+            try:
+                result = re.search("```typescript(.+)```", content["value"], re.DOTALL)
+                if result:
+                    for item in result.groups():
+                        content["value"] = (content["value"].replace('function ', '\nfunction ').replace('import', '\nimport').replace('export', '\nexport').replace(', ', ', \n  ').replace('):', '\n):').replace('}', '  }').replace(') =>', '\n) =>').replace('class', '\nclass').replace('module', '\nmodule').replace("\n\n\n", '\n\n').replace("\n\n\n", '\n\n').strip()).strip("\n")
+            except:
+                pass
             contents.append(minihtml(self.view, content, allowed_formats, language_map))
         return '<hr>'.join(contents)
 
