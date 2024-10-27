@@ -111,7 +111,6 @@ from .workspace import is_subpath_of
 from .workspace import WorkspaceFolder
 from abc import ABCMeta
 from abc import abstractmethod
-from abc import abstractproperty
 from enum import IntEnum, IntFlag
 from typing import Any, Callable, Generator, List, Protocol, TypeVar
 from typing import cast
@@ -128,8 +127,9 @@ T = TypeVar('T')
 
 
 class ViewStateActions(IntFlag):
-    Close = 2
-    Save = 1
+    NONE = 0
+    SAVE = 1
+    CLOSE = 2
 
 
 def is_workspace_full_document_diagnostic_report(
@@ -194,7 +194,8 @@ class Manager(metaclass=ABCMeta):
 
     # Observers
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def window(self) -> sublime.Window:
         """
         Get the window associated with this manager.
@@ -1686,7 +1687,7 @@ class Session(TransportCallbacks):
         self,
         uri: DocumentUri,
         r: Range | None = None,
-        flags: int = 0,
+        flags: sublime.NewFileFlags = sublime.NewFileFlags.NONE,
         group: int = -1
     ) -> Promise[sublime.View | None] | None:
         if uri.startswith("file:"):
@@ -1708,7 +1709,7 @@ class Session(TransportCallbacks):
         self,
         uri: DocumentUri,
         r: Range | None = None,
-        flags: int = 0,
+        flags: sublime.NewFileFlags = sublime.NewFileFlags.NONE,
         group: int = -1
     ) -> Promise[sublime.View | None]:
         promise = self.try_open_uri_async(uri, r, flags, group)
@@ -1718,7 +1719,7 @@ class Session(TransportCallbacks):
         self,
         uri: DocumentUri,
         r: Range | None = None,
-        flags: int = 0,
+        flags: sublime.NewFileFlags = sublime.NewFileFlags.NONE,
         group: int = -1
     ) -> Promise[sublime.View | None]:
         result: PackagedTask[sublime.View | None] = Promise.packaged_task()
@@ -1736,7 +1737,7 @@ class Session(TransportCallbacks):
         plugin: AbstractPlugin,
         uri: DocumentUri,
         r: Range | None,
-        flags: int,
+        flags: sublime.NewFileFlags,
         group: int,
     ) -> Promise[sublime.View | None] | None:
         # I cannot type-hint an unpacked tuple
@@ -1765,8 +1766,12 @@ class Session(TransportCallbacks):
             return result[0]
         return None
 
-    def open_location_async(self, location: Location | LocationLink, flags: int = 0,
-                            group: int = -1) -> Promise[sublime.View | None]:
+    def open_location_async(
+        self,
+        location: Location | LocationLink,
+        flags: sublime.NewFileFlags = sublime.NewFileFlags.NONE,
+        group: int = -1
+    ) -> Promise[sublime.View | None]:
         uri, r = get_uri_and_range_from_location(location)
         return self.open_uri_async(uri, r, flags, group)
 
@@ -1843,17 +1848,17 @@ class Session(TransportCallbacks):
         apply_text_edits(view, edits, required_view_version=view_version)
         return view
 
-    def _get_view_state_actions(self, uri: DocumentUri, auto_save: str) -> int:
+    def _get_view_state_actions(self, uri: DocumentUri, auto_save: str) -> ViewStateActions:
         """
         Determine the required actions for a view after applying a WorkspaceEdit, depending on the
         "refactoring_auto_save" user setting. Returns a bitwise combination of ViewStateActions.Save and
         ViewStateActions.Close, or 0 if no action is necessary.
         """
         if auto_save == 'never':
-            return 0  # Never save or close automatically
+            return ViewStateActions.NONE  # Never save or close automatically
         scheme, filepath = parse_uri(uri)
         if scheme != 'file':
-            return 0  # Can't save or close unsafed buffers (and other schemes) without user dialog
+            return ViewStateActions.NONE  # Can't save or close unsafed buffers (and other schemes) without user dialog
         view = self.window.find_open_file(filepath)
         if view:
             is_opened = True
@@ -1861,27 +1866,27 @@ class Session(TransportCallbacks):
         else:
             is_opened = False
             is_dirty = False
-        actions = 0
+        actions = ViewStateActions.NONE
         if auto_save == 'always':
-            actions |= ViewStateActions.Save  # Always save
+            actions |= ViewStateActions.SAVE  # Always save
             if not is_opened:
-                actions |= ViewStateActions.Close  # Close if file was previously closed
+                actions |= ViewStateActions.CLOSE  # Close if file was previously closed
         elif auto_save == 'preserve':
             if not is_dirty:
-                actions |= ViewStateActions.Save  # Only save if file didn't have unsaved changes
+                actions |= ViewStateActions.SAVE  # Only save if file didn't have unsaved changes
             if not is_opened:
-                actions |= ViewStateActions.Close  # Close if file was previously closed
+                actions |= ViewStateActions.CLOSE  # Close if file was previously closed
         elif auto_save == 'preserve_opened':
             if is_opened and not is_dirty:
                 # Only save if file was already open and didn't have unsaved changes, but never close
-                actions |= ViewStateActions.Save
+                actions |= ViewStateActions.SAVE
         return actions
 
-    def _set_view_state(self, actions: int, view: sublime.View | None) -> None:
+    def _set_view_state(self, actions: ViewStateActions, view: sublime.View | None) -> None:
         if not view:
             return
-        should_save = bool(actions & ViewStateActions.Save)
-        should_close = bool(actions & ViewStateActions.Close)
+        should_save = bool(actions & ViewStateActions.SAVE)
+        should_close = bool(actions & ViewStateActions.CLOSE)
         if should_save and view.is_dirty():
             # The save operation must be blocking in case the tab should be closed afterwards
             view.run_command('save', {'async': not should_close, 'quiet': True})

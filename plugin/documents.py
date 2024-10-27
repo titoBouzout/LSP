@@ -55,8 +55,11 @@ from .hover import code_actions_content
 from .session_buffer import SessionBuffer
 from .session_view import SessionView
 from functools import partial
-from typing import Any, Callable, Generator, Iterable
+from functools import wraps
+from os.path import basename
+from typing import Any, Callable, Generator, Iterable, TypeVar
 from typing import cast
+from typing_extensions import Concatenate, ParamSpec
 from weakref import WeakSet
 from weakref import WeakValueDictionary
 import itertools
@@ -68,6 +71,24 @@ import webbrowser
 
 SUBLIME_WORD_MASK = 515
 
+P = ParamSpec('P')
+R = TypeVar('R')
+
+
+def requires_session(
+    func: Callable[Concatenate[DocumentSyncListener, P], R]
+) -> Callable[Concatenate[DocumentSyncListener, P], R | None]:
+    """
+    A decorator for the `DocumentSyncListener` event handlers, which immediately returns `None` if there are no
+    `SessionView`s.
+    """
+    @wraps(func)
+    def wrapper(self: DocumentSyncListener, *args: P.args, **kwargs: P.kwargs) -> R | None:
+        if not self.session_views_async():
+            return None
+        return func(self, *args, **kwargs)
+    return wrapper
+
 
 def is_regular_view(v: sublime.View) -> bool:
     # Not from the quick panel (CTRL+P), and not a special view like a console, output panel or find-in-files panels.
@@ -75,6 +96,10 @@ def is_regular_view(v: sublime.View) -> bool:
         return False
     if v.settings().get('is_widget'):
         return False
+    # Not a syntax test file.
+    if (filename := v.file_name()) and basename(filename).startswith('syntax_test_'):
+        return False
+    # Not a transient sheet (preview).
     sheet = v.sheet()
     if not sheet:
         return False
@@ -86,7 +111,7 @@ def is_regular_view(v: sublime.View) -> bool:
 def previous_non_whitespace_char(view: sublime.View, pt: int) -> str:
     prev = view.substr(pt - 1)
     if prev.isspace():
-        return view.substr(view.find_by_class(pt, False, ~0) - 1)
+        return view.substr(view.find_by_class(pt, False, ~0) - 1)  # type: ignore
     return prev
 
 
@@ -327,6 +352,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
     def session_views_async(self) -> list[SessionView]:
         return list(self._session_views.values())
 
+    @requires_session
     def on_text_changed_async(self, change_count: int, changes: Iterable[sublime.TextChange]) -> None:
         if self.view.is_primary():
             for sv in self.session_views_async():
@@ -364,9 +390,12 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
             return
         if not self._registered:
             self._register_async()
+        session_views = self.session_views_async()
+        if not session_views:
+            return
         if userprefs().show_code_actions:
             self._do_code_actions_async()
-        for sv in self.session_views_async():
+        for sv in session_views:
             if sv.code_lenses_needs_refresh:
                 sv.set_code_lenses_pending_refresh(needs_refresh=False)
                 sv.start_code_lenses_async()
@@ -381,6 +410,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
                 sb.set_inlay_hints_pending_refresh(needs_refresh=False)
                 sb.do_inlay_hints_async(self.view)
 
+    @requires_session
     def on_selection_modified_async(self) -> None:
         first_region, _ = self._update_stored_selection_async()
         if first_region is None:
@@ -449,27 +479,28 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
 
     def on_query_context(self, key: str, operator: int, operand: Any, match_all: bool) -> bool | None:
         # You can filter key bindings by the precense of a provider,
-        if key == "lsp.session_with_capability" and operator == sublime.OP_EQUAL and isinstance(operand, str):
+        if key == "lsp.session_with_capability" and operator == sublime.QueryOperator.EQUAL and \
+                isinstance(operand, str):
             capabilities = [s.strip() for s in operand.split("|")]
             for capability in capabilities:
                 if any(self.sessions_async(capability)):
                     return True
             return False
         # You can filter key bindings by the precense of a specific name of a configuration.
-        elif key == "lsp.session_with_name" and operator == sublime.OP_EQUAL and isinstance(operand, str):
+        elif key == "lsp.session_with_name" and operator == sublime.QueryOperator.EQUAL and isinstance(operand, str):
             return bool(self.session_by_name(operand))
         # You can check if there is at least one session attached to this view.
         elif key in ("lsp.sessions", "setting.lsp_active"):
             return bool(self._session_views)
         # Signature Help handling
-        elif key == "lsp.signature_help_multiple_choices_available" and operator == sublime.OP_EQUAL:
+        elif key == "lsp.signature_help_multiple_choices_available" and operator == sublime.QueryOperator.EQUAL:
             return operand == bool(
                 self._sighelp and self._sighelp.has_multiple_signatures() and
                 self.view.is_popup_visible() and not self.view.is_auto_complete_visible()
             )
-        elif key == "lsp.signature_help_available" and operator == sublime.OP_EQUAL:
+        elif key == "lsp.signature_help_available" and operator == sublime.QueryOperator.EQUAL:
             return operand == bool(not self.view.is_popup_visible() and self._get_signature_help_session())
-        elif key == "lsp.link_available" and operator == sublime.OP_EQUAL:
+        elif key == "lsp.link_available" and operator == sublime.QueryOperator.EQUAL:
             position = get_position(self.view)
             if position is None:
                 return not operand
@@ -482,13 +513,14 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
             return operand == bool(session_view.session_buffer.get_document_link_at_point(self.view, position))
         return None
 
+    @requires_session
     def on_hover(self, point: int, hover_zone: int) -> None:
         if self.view.is_popup_visible():
             return
         window = self.view.window()
-        if hover_zone == sublime.HOVER_TEXT and window and window.settings().get(HOVER_ENABLED_KEY, True):
+        if hover_zone == sublime.HoverZone.TEXT and window and window.settings().get(HOVER_ENABLED_KEY, True):
             self.view.run_command("lsp_hover", {"point": point})
-        elif hover_zone == sublime.HOVER_GUTTER:
+        elif hover_zone == sublime.HoverZone.GUTTER:
             sublime.set_timeout_async(partial(self._on_hover_gutter_async, point))
 
     def _on_hover_gutter_async(self, point: int) -> None:
@@ -520,10 +552,11 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
             show_lsp_popup(
                 self.view,
                 content,
-                flags=sublime.HIDE_ON_MOUSE_MOVE_AWAY,
+                flags=sublime.PopupFlags.HIDE_ON_MOUSE_MOVE_AWAY,
                 location=point,
                 on_navigate=lambda href: self._on_navigate(href, point))
 
+    @requires_session
     def on_text_command(self, command_name: str, args: dict | None) -> tuple[str, dict] | None:
         if command_name == "auto_complete":
             self._auto_complete_triggered_manually = True
@@ -539,6 +572,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
                 return ('paste', {})
         return None
 
+    @requires_session
     def on_post_text_command(self, command_name: str, args: dict[str, Any] | None) -> None:
         if command_name == 'paste':
             format_on_paste = self.view.settings().get('lsp_format_on_paste', userprefs().lsp_format_on_paste)
@@ -552,6 +586,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
             # hide the popup when `esc` or arrows are pressed pressed
             self.view.hide_popup()
 
+    @requires_session
     def on_query_completions(self, prefix: str, locations: list[int]) -> sublime.CompletionList | None:
         completion_list = sublime.CompletionList()
         triggered_manually = self._auto_complete_triggered_manually
@@ -577,7 +612,10 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
         self._completions_task.query_completions_async(sessions)
 
     def _on_query_completions_resolved_async(
-        self, clist: sublime.CompletionList, completions: list[sublime.CompletionItem], flags: int = 0
+        self,
+        clist: sublime.CompletionList,
+        completions: list[sublime.CompletionItem],
+        flags: sublime.AutoCompleteFlags = sublime.AutoCompleteFlags.NONE
     ) -> None:
         self._completions_task = None
         # Resolve on the main thread to prevent any sort of data race for _set_target (see sublime_plugin.py).
@@ -664,7 +702,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
         show_lsp_popup(
             self.view,
             content,
-            flags=sublime.COOPERATE_WITH_AUTO_COMPLETE,
+            flags=sublime.PopupFlags.COOPERATE_WITH_AUTO_COMPLETE,
             location=point,
             body_id='lsp-signature-help',
             on_hide=self._on_sighelp_hide,
@@ -711,7 +749,7 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
         regions = [sublime.Region(region.b, region.a)]
         scope = ""
         icon = ""
-        flags = sublime.DRAW_NO_FILL | sublime.DRAW_NO_OUTLINE | sublime.NO_UNDO
+        flags = sublime.RegionFlags.DRAW_NO_FILL | sublime.RegionFlags.DRAW_NO_OUTLINE | sublime.RegionFlags.NO_UNDO
         annotations = []
         annotation_color = ""
         if userprefs().show_code_actions == 'bulb':
@@ -991,12 +1029,16 @@ class DocumentSyncListener(sublime_plugin.ViewEventListener, AbstractViewListene
         for index, region in enumerate(sel):
             if multi_cursor_paste:
                 pasted_text = split_clipboard_text[index]
-            pasted_region = self.view.find(pasted_text, region.end(), sublime.REVERSE | sublime.LITERAL)
+            pasted_region = self.view.find(
+                pasted_text, region.end(), sublime.FindFlags.REVERSE | sublime.FindFlags.LITERAL)
             if pasted_region:
                 # Including whitespace may help servers format a range better
                 # More info at https://github.com/sublimelsp/LSP/pull/2311#issuecomment-1688593038
-                a = self.view.find_by_class(pasted_region.a, False,
-                                            sublime.CLASS_WORD_END | sublime.CLASS_PUNCTUATION_END)
+                a = self.view.find_by_class(
+                    pasted_region.a,
+                    False,
+                    sublime.PointClassification.WORD_END | sublime.PointClassification.PUNCTUATION_END
+                )
                 formatting_region = sublime.Region(a, pasted_region.b)
                 regions_to_format.append(formatting_region)
         self.purge_changes_async()
