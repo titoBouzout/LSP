@@ -109,8 +109,9 @@ class LocationPicker:
 
     def _select_entry(self, index: int) -> None:
         if self._view.is_valid() and not self._side_by_side:
-            self._view.set_viewport_position(self._view_states[1])
-            self._view.run_command('lsp_selection_set', {'regions': self._view_states[0]})
+            pass
+            # self._view.set_viewport_position(self._view_states[1])
+            # self._view.run_command('lsp_selection_set', {'regions': self._view_states[0]})
         if index >= 0 and self._view.is_valid():
             session, location, uri, position = self._unpack(index)
             if not session:
