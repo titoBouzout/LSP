@@ -235,6 +235,28 @@ Follow installation instructions on [LSP-graphql](https://github.com/sublimelsp/
     }
     ```
 
+## Helm
+
+1. Install [helm-ls](https://github.com/mrjosh/helm-ls).
+2. (Optional & recommended) Install [yaml-language-server](https://github.com/mrjosh/helm-ls?tab=readme-ov-file#integration-with-yaml-language-server).
+3. Open `Preferences > Package Settings > LSP > Settings` and add the `"helm-ls"` client configuration to the `"clients"`:
+
+    ```jsonc
+    {
+        "clients": {
+            "helm-ls": {
+                "enabled": true,
+                "command": ["helm_ls", "serve"],
+                "selector": "source.yaml.go", // Requires ST 4181+. Use `source.yaml` otherwise.
+            },
+        },
+    }
+    ```
+
+Note that the YAML language server on its own does not function properly for Helm files,
+which is why helm-ls interfaces with it directly.
+The default configuration of [LSP-yaml](#yaml) disables itself for Go-templated files.
+
 ## HTML
 
 Follow installation instructions on [LSP-html](https://github.com/sublimelsp/LSP-html).
@@ -401,6 +423,15 @@ Spell check can be provided by [LSP-ltex-ls](https://github.com/LDAP/LSP-ltex-ls
     }
     ```
 
+### Marksman
+
+An LSP server for Markdown that provides completion, go to definition, find references, diagnostics, and more.
+
+Follow installation instructions on [LSP-marksman](https://github.com/sublimelsp/LSP-marksman).
+
+## Nim
+
+Follow installation instructions on [LSP-nimlangserver](https://github.com/sublimelsp/LSP-nimlangserver).
 
 ## OCaml/Reason
 
@@ -424,6 +455,51 @@ Spell check can be provided by [LSP-ltex-ls](https://github.com/LDAP/LSP-ltex-ls
 ## Odin
 
 Follow installation instructions on [ols](https://github.com/DanielGavin/ols/).
+
+## Perl
+
+1. Install [Perl Navigator](https://github.com/bscan/PerlNavigator). The below example configuration assumes global NPM installation.
+2. Install Perl::Critic, Perl::Tidy, etc. as required.
+3. Open `Preferences > Package Settings > LSP > Settings` and add the `"perlnavigator"` client configuration to the `"clients"`:
+
+    ```jsonc
+    {
+        "clients": {
+            "perlnavigator": {
+                "enabled": true,
+                "command": [
+                    "/path/to/your/node", 
+                    "/path/to/your/globally/installed/perlnavigator",
+                    "--stdio"
+                ],
+                "selector": "source.perl",
+                "settings": {
+                    // "perlnavigator.perltidyProfile": "~/.perltidyrc",
+                    // "perlnavigator.perlcriticProfile": "~/.perlcriticrc",
+                    // "perlnavigator.perlEnvAdd": true,
+                    // "perlnavigator.perlEnv": {
+                    //     "KOHA_CONF": "/home/user/git/KohaCommunity/t/data/koha-conf.xml",
+                    // },
+                    // "perlnavigator.perlPath": "~/perl5/perlbrew/perls/perl-5.38.2/bin",
+                    // "perlnavigator.perlcriticSeverity": 1,
+                    // "perlnavigator.perlcriticEnabled": true,
+                    // "perlnavigator.enableWarnings": true,
+                    "perlnavigator.includePaths": [
+                        // Used for syntax checking, typically local project roots.
+                        // NOT used for finding installed modules such as perlcritic/perltidy/perlimports.
+                        // Supports "$workspaceFolder", no need to include "$workspaceFolder/lib/".
+                    ],
+                    "perlnavigator.perlParams": [
+                        // This is a list of arguments always passed to Perl.
+                        // Does not support $workspaceFolder.
+                        // Useful for finding perlcritic/perltidy/perlimports.
+                        // "-I/path/to/local/perl5/bin"
+                    ]
+                }
+            }
+        },
+    }
+    ```
 
 ## PromQL
 
@@ -550,7 +626,7 @@ There are multiple options:
         "clients": {
             "sorbet": {
                 "enabled": true,
-                "command": ["srb", "tc", "--typed", "true", "--enable-all-experimental-lsp-features", "--lsp", "--disable-watchman"],
+                "command": ["srb", "tc", "--typed", "true", "--enable-all-experimental-lsp-features", "--lsp", "--disable-watchman", "."],
                 "selector": "source.ruby | text.html.ruby",
             }
         }
